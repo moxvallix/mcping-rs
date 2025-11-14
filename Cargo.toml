@@ -1,0 +1,8 @@
+[package]
+name = "mcping-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rust_mc_proto = "0.1.19"
+hostport = "0.4.0"
