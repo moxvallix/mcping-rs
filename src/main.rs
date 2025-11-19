@@ -1,8 +1,13 @@
-use std::{env, net::{TcpStream, ToSocketAddrs}, str::FromStr, time::Duration};
+use std::{env, net::{TcpStream, ToSocketAddrs}, process::exit, str::FromStr, time::Duration};
+use resolve::{DnsConfig, DnsResolver, record::{self, Srv}};
 use rust_mc_proto::{MinecraftConnection, MCConnTcp, Packet, ProtocolError, prelude::*};
 use hostport::HostPort;
 
 const TCP_CONNECTION_TIMEOUT: Duration = Duration::from_millis(5000);
+
+const ERROR_CODE_GENERAL: i32 = 1;
+const ERROR_CODE_ADDRESS: i32 = 2;
+const ERROR_CODE_STREAM: i32 = 3;
 
 /// Connect to Minecraft Server with TcpStream
 pub fn connect_to_minecraft_server(addr: impl ToSocketAddrs) -> Result<MinecraftConnection<TcpStream>, ProtocolError> {
@@ -45,17 +50,77 @@ fn read_status_response(conn: &mut MCConnTcp) -> Result<String, ProtocolError> {
   conn.read_packet()?.read_string()
 }
 
+fn lookup_srv_record(address: &String) -> Option<(String, u16)> {
+  let config = match DnsConfig::load_default() {
+    Ok(config) => config,
+    Err(_) => return None,
+  };
+
+  let resolver = match DnsResolver::new(config) {
+    Ok(resolver) => resolver,
+    Err(_) => return None,
+  };
+
+  let name = format!("_minecraft._tcp.{address}");
+
+  match resolver.resolve_record::<Srv>(&name) {
+    Ok(records) => {
+      if let Some(record)= records.get(0) {
+        Some((record.target.to_string(), record.port))
+      } else {
+        None
+      }
+    },
+    Err(_) => None,
+  }
+}
+
 fn main() {
   let args: Vec<String> = env::args().collect();
-  let input = args.get(1).expect("Address not provided");
-
-  let hostport = HostPort::from_str(input).unwrap_or_else(|_error| {
-    HostPort::from_str(&format!("{}:25565", input)).unwrap()
+  let input = args.get(1).unwrap_or_else(|| {
+    eprintln!("No address provided.");
+    exit(ERROR_CODE_GENERAL);
   });
+  
+  let host: String;
+  let port: u16;
 
-  let mut conn = connect_to_minecraft_server(hostport.to_string()).expect("Couldn't connect to the server...");
+  if input.contains(':') {
+    let hostport = HostPort::from_str(input).unwrap_or_else(|_error| {
+      HostPort::from_str(&format!("{}:25565", input)).unwrap_or_else(|_error2| {
+        eprintln!("Address could not be parsed.");
+        exit(ERROR_CODE_GENERAL);      
+      })
+    });
 
-  send_handshake(&mut conn, 765, hostport.host(), hostport.port(), 1).unwrap();
+    host = hostport.host().to_string();
+    port = hostport.port();
+  } else {
+    if let Some((srv_host, srv_port)) = lookup_srv_record(input) {
+      host = srv_host;
+      port = srv_port;
+    } else {
+      host = input.to_string();
+      port = 25565;
+    }
+  }
+
+  let mut conn = connect_to_minecraft_server(format!("{host}:{port}")).unwrap_or_else(|error| {
+      match error {
+        ProtocolError::AddressParseError => {
+          eprintln!("Address could not be parsed.");
+          exit(ERROR_CODE_ADDRESS)
+        },
+        ProtocolError::StreamConnectError => {
+          eprintln!("Stream connection error.");
+          exit(ERROR_CODE_STREAM)
+        },
+        _ => todo!(),
+      }
+    }
+  );
+
+  send_handshake(&mut conn, 765, &host, port, 1).unwrap();
   send_status_request(&mut conn).unwrap();
 
   let json = read_status_response(&mut conn).unwrap();
