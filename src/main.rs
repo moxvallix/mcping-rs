@@ -1,5 +1,5 @@
 use std::{env, net::{TcpStream, ToSocketAddrs}, process::exit, str::FromStr, time::Duration};
-use resolve::{DnsConfig, DnsResolver, record::{self, Srv}};
+use resolve::{DnsConfig, DnsResolver, record::Srv};
 use rust_mc_proto::{MinecraftConnection, MCConnTcp, Packet, ProtocolError, prelude::*};
 use hostport::HostPort;
 
